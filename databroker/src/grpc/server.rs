@@ -20,8 +20,6 @@ use tonic::transport::Server;
 use tonic::transport::ServerTlsConfig;
 use tracing::{debug, info};
 
-use databroker_proto::{kuksa, sdv};
-
 use crate::{
     authorization::Authorization,
     broker,
@@ -176,7 +174,7 @@ where
 
     let kuksa_val_v1 = {
         if apis.contains(&Api::KuksaValV1) {
-            Some(kuksa::val::v1::val_server::ValServer::with_interceptor(
+            Some(kuksa_proto::v1::val_server::ValServer::with_interceptor(
                 broker.clone(),
                 authorization.clone(),
             ))
@@ -189,13 +187,13 @@ where
 
     if apis.contains(&Api::SdvDatabrokerV1) {
         router = router.add_optional_service(Some(
-            sdv::databroker::v1::broker_server::BrokerServer::with_interceptor(
+            databroker_proto::v1::broker_server::BrokerServer::with_interceptor(
                 broker.clone(),
                 authorization.clone(),
             ),
         ));
         router = router.add_optional_service(Some(
-            sdv::databroker::v1::collector_server::CollectorServer::with_interceptor(
+            databroker_proto::v1::collector_server::CollectorServer::with_interceptor(
                 broker.clone(),
                 authorization,
             ),

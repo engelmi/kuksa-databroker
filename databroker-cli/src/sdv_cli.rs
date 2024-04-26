@@ -11,8 +11,7 @@
 * SPDX-License-Identifier: Apache-2.0
 ********************************************************************************/
 
-use databroker_proto::sdv::databroker as proto;
-use kuksa_sdv::*;
+use databroker_proto::v1 as proto;
 
 use prost_types::Timestamp;
 use tokio_stream::StreamExt;
@@ -67,7 +66,7 @@ fn print_usage(command: impl AsRef<str>) {
 }
 
 pub async fn sdv_main(_cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
-    let mut properties = Vec::<proto::v1::Metadata>::new();
+    let mut properties = Vec::<proto::Metadata>::new();
     println!("Using {VERSION}");
     let mut cli = _cli;
 
@@ -83,11 +82,11 @@ pub async fn sdv_main(_cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
 
     cli::set_disconnected_prompt(&interface);
 
-    let mut client = SDVClient::new(kuksa_common::to_uri(cli.get_server())?);
+    let mut client = databroker_grpc::Client::new(kuksa_grpc::to_uri(cli.get_server())?);
 
     if let Some(token_filename) = cli.get_token_file() {
         let token = std::fs::read_to_string(token_filename)?;
-        client.basic_client.set_access_token(token)?;
+        client.set_access_token(token)?;
     }
 
     #[cfg(feature = "tls")]
@@ -97,20 +96,20 @@ pub async fn sdv_main(_cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
 
         let tls_config = tonic::transport::ClientTlsConfig::new().ca_certificate(ca_cert);
 
-        client.basic_client.set_tls_config(tls_config);
+        client.set_tls_config(tls_config);
     }
 
-    let mut connection_state_subscription = client.basic_client.subscribe_to_connection_state();
+    let mut connection_state_subscription = client.subscribe_to_connection_state();
     let interface_ref = interface.clone();
 
     tokio::spawn(async move {
         while let Some(state) = connection_state_subscription.next().await {
             match state {
                 Ok(state) => match state {
-                    kuksa_common::ConnectionState::Connected => {
+                    kuksa_grpc::ConnectionState::Connected => {
                         cli::set_connected_prompt(&interface_ref, VERSION.to_string());
                     }
-                    kuksa_common::ConnectionState::Disconnected => {
+                    kuksa_grpc::ConnectionState::Disconnected => {
                         cli::set_disconnected_prompt(&interface_ref);
                     }
                 },
@@ -147,12 +146,9 @@ pub async fn sdv_main(_cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             };
             cli::print_logo(version);
 
-            match client.basic_client.try_connect().await {
+            match client.try_connect().await {
                 Ok(()) => {
-                    cli::print_info(format!(
-                        "Successfully connected to {}",
-                        client.basic_client.get_uri()
-                    ))?;
+                    cli::print_info(format!("Successfully connected to {}", client.get_uri()))?;
 
                     let pattern = vec![];
 
@@ -162,15 +158,16 @@ pub async fn sdv_main(_cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                                 .set_completer(Arc::new(CliCompleter::from_metadata(&metadata)));
                             properties = metadata;
                         }
-                        Err(kuksa_common::ClientError::Status(status)) => {
-                            cli::print_resp_err("metadata", &status)?;
-                        }
-                        Err(kuksa_common::ClientError::Connection(msg)) => {
-                            cli::print_error("metadata", msg)?;
-                        }
-                        Err(kuksa_common::ClientError::Function(msg)) => {
-                            cli::print_resp_err_fmt("metadata", format_args!("Error {msg:?}"))?;
-                        }
+                        // Err(databroker_grpc::Error::Status(status)) => {
+                        //     cli::print_resp_err("metadata", &status)?;
+                        // }
+                        // Err(databroker_grpc::Error::Connection(msg)) => {
+                        //     cli::print_error("metadata", msg)?;
+                        // }
+                        // Err(databroker_grpc::Error::Function(msg)) => {
+                        //     cli::print_resp_err_fmt("metadata", format_args!("Error {msg:?}"))?;
+                        // }
+                        Err(err) => cli::print_error("metadata", err.to_string())?,
                     }
                 }
                 Err(err) => {
@@ -212,15 +209,16 @@ pub async fn sdv_main(_cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                                         println!("{}: {}", name, DisplayDatapoint(datapoint),);
                                     }
                                 }
-                                Err(kuksa_common::ClientError::Status(err)) => {
-                                    cli::print_resp_err(cmd, &err)?;
-                                }
-                                Err(kuksa_common::ClientError::Connection(msg)) => {
-                                    cli::print_error(cmd, msg)?;
-                                }
-                                Err(kuksa_common::ClientError::Function(msg)) => {
-                                    cli::print_resp_err_fmt(cmd, format_args!("Error {msg:?}"))?;
-                                }
+                                // Err(databroker_grpc::Error::Status(err)) => {
+                                //     cli::print_resp_err(cmd, &err)?;
+                                // }
+                                // Err(databroker_grpc::Error::Connection(msg)) => {
+                                //     cli::print_error(cmd, msg)?;
+                                // }
+                                // Err(databroker_grpc::Error::Function(msg)) => {
+                                //     cli::print_resp_err_fmt(cmd, format_args!("Error {msg:?}"))?;
+                                // }
+                                Err(err) => cli::print_error(cmd, err.to_string())?,
                             }
                         }
                         "token" => {
@@ -231,7 +229,7 @@ pub async fn sdv_main(_cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                                 continue;
                             }
 
-                            match client.basic_client.set_access_token(args) {
+                            match client.set_access_token(args) {
                                 Ok(()) => {
                                     cli::print_info("Access token set.")?;
                                     match client.get_metadata(vec![]).await {
@@ -241,18 +239,19 @@ pub async fn sdv_main(_cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                                             ));
                                             properties = metadata;
                                         }
-                                        Err(kuksa_common::ClientError::Status(status)) => {
-                                            cli::print_resp_err("metadata", &status)?;
-                                        }
-                                        Err(kuksa_common::ClientError::Connection(msg)) => {
-                                            cli::print_error("metadata", msg)?;
-                                        }
-                                        Err(kuksa_common::ClientError::Function(msg)) => {
-                                            cli::print_resp_err_fmt(
-                                                "metadata",
-                                                format_args!("Error {msg:?}"),
-                                            )?;
-                                        }
+                                        // Err(databroker_grpc::Error::Status(status)) => {
+                                        //     cli::print_resp_err("metadata", &status)?;
+                                        // }
+                                        // Err(databroker_grpc::Error::Connection(msg)) => {
+                                        //     cli::print_error("metadata", msg)?;
+                                        // }
+                                        // Err(databroker_grpc::Error::Function(msg)) => {
+                                        //     cli::print_resp_err_fmt(
+                                        //         "metadata",
+                                        //         format_args!("Error {msg:?}"),
+                                        //     )?;
+                                        // }
+                                        Err(err) => cli::print_error(cmd, err.to_string())?,
                                     }
                                 }
                                 Err(err) => {
@@ -270,7 +269,7 @@ pub async fn sdv_main(_cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
 
                             let token_filename = args.trim();
                             match std::fs::read_to_string(token_filename) {
-                                Ok(token) => match client.basic_client.set_access_token(token) {
+                                Ok(token) => match client.set_access_token(token) {
                                     Ok(()) => {
                                         cli::print_info("Access token set.")?;
                                         match client.get_metadata(vec![]).await {
@@ -280,18 +279,19 @@ pub async fn sdv_main(_cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                                                 ));
                                                 properties = metadata;
                                             }
-                                            Err(kuksa_common::ClientError::Status(status)) => {
-                                                cli::print_resp_err("metadata", &status)?;
-                                            }
-                                            Err(kuksa_common::ClientError::Connection(msg)) => {
-                                                cli::print_error("metadata", msg)?;
-                                            }
-                                            Err(kuksa_common::ClientError::Function(msg)) => {
-                                                cli::print_resp_err_fmt(
-                                                    cmd,
-                                                    format_args!("Error {msg:?}"),
-                                                )?;
-                                            }
+                                            // Err(databroker_grpc::Error::Status(status)) => {
+                                            //     cli::print_resp_err("metadata", &status)?;
+                                            // }
+                                            // Err(databroker_grpc::Error::Connection(msg)) => {
+                                            //     cli::print_error("metadata", msg)?;
+                                            // }
+                                            // Err(databroker_grpc::Error::Function(msg)) => {
+                                            //     cli::print_resp_err_fmt(
+                                            //         cmd,
+                                            //         format_args!("Error {msg:?}"),
+                                            //     )?;
+                                            // }
+                                            Err(err) => cli::print_error(cmd, err.to_string())?,
                                         }
                                     }
                                     Err(err) => {
@@ -336,17 +336,17 @@ pub async fn sdv_main(_cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                             if let Some(metadata) = datapoint_metadata {
                                 let data_value = try_into_data_value(
                                     value,
-                                    proto::v1::DataType::from_i32(metadata.data_type).unwrap(),
+                                    proto::DataType::from_i32(metadata.data_type).unwrap(),
                                 );
                                 if data_value.is_err() {
                                     println!(
                                         "Could not parse \"{value}\" as {:?}",
-                                        proto::v1::DataType::from_i32(metadata.data_type).unwrap()
+                                        proto::DataType::from_i32(metadata.data_type).unwrap()
                                     );
                                     continue;
                                 }
 
-                                if metadata.entry_type != proto::v1::EntryType::Actuator as i32 {
+                                if metadata.entry_type != proto::EntryType::Actuator as i32 {
                                     cli::print_error(
                                         cmd,
                                         format!("{} is not an actuator.", metadata.name),
@@ -357,7 +357,7 @@ pub async fn sdv_main(_cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                                 let ts = Timestamp::from(SystemTime::now());
                                 let datapoints = HashMap::from([(
                                     metadata.name.clone(),
-                                    proto::v1::Datapoint {
+                                    proto::Datapoint {
                                         timestamp: Some(ts),
                                         value: Some(data_value.unwrap()),
                                     },
@@ -369,7 +369,7 @@ pub async fn sdv_main(_cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                                             cli::print_resp_ok(cmd)?;
                                         } else {
                                             for (id, error) in message.errors {
-                                                match proto::v1::DatapointError::from_i32(error) {
+                                                match proto::DatapointError::from_i32(error) {
                                                     Some(error) => {
                                                         cli::print_resp_ok(cmd)?;
                                                         println!(
@@ -386,18 +386,19 @@ pub async fn sdv_main(_cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                                             }
                                         }
                                     }
-                                    Err(kuksa_common::ClientError::Status(status)) => {
-                                        cli::print_resp_err(cmd, &status)?
-                                    }
-                                    Err(kuksa_common::ClientError::Connection(msg)) => {
-                                        cli::print_error(cmd, msg)?
-                                    }
-                                    Err(kuksa_common::ClientError::Function(msg)) => {
-                                        cli::print_resp_err_fmt(
-                                            cmd,
-                                            format_args!("Error {msg:?}"),
-                                        )?;
-                                    }
+                                    // Err(databroker_grpc::Error::Status(status)) => {
+                                    //     cli::print_resp_err(cmd, &status)?
+                                    // }
+                                    // Err(databroker_grpc::Error::Connection(msg)) => {
+                                    //     cli::print_error(cmd, msg)?
+                                    // }
+                                    // Err(databroker_grpc::Error::Function(msg)) => {
+                                    //     cli::print_resp_err_fmt(
+                                    //         cmd,
+                                    //         format_args!("Error {msg:?}"),
+                                    //     )?;
+                                    // }
+                                    Err(err) => cli::print_error(cmd, err.to_string())?,
                                 }
                             }
                         }
@@ -431,20 +432,20 @@ pub async fn sdv_main(_cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                             if let Some(metadata) = datapoint_metadata {
                                 let data_value = try_into_data_value(
                                     value,
-                                    proto::v1::DataType::from_i32(metadata.data_type).unwrap(),
+                                    proto::DataType::from_i32(metadata.data_type).unwrap(),
                                 );
                                 if data_value.is_err() {
                                     println!(
                                         "Could not parse \"{}\" as {:?}",
                                         value,
-                                        proto::v1::DataType::from_i32(metadata.data_type).unwrap()
+                                        proto::DataType::from_i32(metadata.data_type).unwrap()
                                     );
                                     continue;
                                 }
                                 let ts = Timestamp::from(SystemTime::now());
                                 let datapoints = HashMap::from([(
                                     metadata.id,
-                                    proto::v1::Datapoint {
+                                    proto::Datapoint {
                                         timestamp: Some(ts),
                                         value: Some(data_value.unwrap()),
                                     },
@@ -461,7 +462,7 @@ pub async fn sdv_main(_cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                                                 } else {
                                                     format!("id {id}")
                                                 };
-                                                match proto::v1::DatapointError::from_i32(error) {
+                                                match proto::DatapointError::from_i32(error) {
                                                     Some(error) => cli::print_resp_ok_fmt(
                                                         cmd,
                                                         format_args!(
@@ -476,17 +477,20 @@ pub async fn sdv_main(_cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                                             }
                                         }
                                     }
-                                    Err(kuksa_common::ClientError::Status(status)) => {
-                                        cli::print_resp_err(cmd, &status)?
-                                    }
-                                    Err(kuksa_common::ClientError::Connection(msg)) => {
-                                        cli::print_error(cmd, msg)?
-                                    }
-                                    Err(kuksa_common::ClientError::Function(msg)) => {
-                                        cli::print_resp_err_fmt(
-                                            cmd,
-                                            format_args!("Error {msg:?}"),
-                                        )?;
+                                    // Err(databroker_grpc::Error::Status(status)) => {
+                                    //     cli::print_resp_err(cmd, &status)?
+                                    // }
+                                    // Err(databroker_grpc::Error::Connection(msg)) => {
+                                    //     cli::print_error(cmd, msg)?
+                                    // }
+                                    // Err(databroker_grpc::Error::Function(msg)) => {
+                                    //     cli::print_resp_err_fmt(
+                                    //         cmd,
+                                    //         format_args!("Error {msg:?}"),
+                                    //     )?;
+                                    // }
+                                    Err(err) => {
+                                        cli::print_error(cmd, err.to_string())?;
                                     }
                                 }
                             }
@@ -581,26 +585,29 @@ pub async fn sdv_main(_cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                                             )?;
                                     subscription_nbr += 1;
                                 }
-                                Err(kuksa_common::ClientError::Status(status)) => {
+                                Err(databroker_grpc::Error::Status(status)) => {
                                     cli::print_resp_err(cmd, &status)?
                                 }
-                                Err(kuksa_common::ClientError::Connection(msg)) => {
-                                    cli::print_error(cmd, msg)?
-                                }
-                                Err(kuksa_common::ClientError::Function(msg)) => {
-                                    cli::print_resp_err_fmt(cmd, format_args!("Error {msg:?}"))?
+                                // Err(databroker_grpc::Error::Connection(msg)) => {
+                                //     cli::print_error(cmd, msg)?
+                                // }
+                                // Err(databroker_grpc::Error::Function(msg)) => {
+                                //     cli::print_resp_err_fmt(cmd, format_args!("Error {msg:?}"))?
+                                // }
+                                Err(err) => {
+                                    cli::print_error(cmd, err.to_string())?;
                                 }
                             }
                         }
                         "connect" => {
                             interface.add_history_unique(line.clone());
-                            if !client.basic_client.is_connected() || !args.is_empty() {
+                            if !client.is_connected() || !args.is_empty() {
                                 if args.is_empty() {
-                                    match client.basic_client.try_connect().await {
+                                    match client.try_connect().await {
                                         Ok(()) => {
                                             cli::print_info(format!(
                                                 "[{cmd}] Successfully connected to {}",
-                                                client.basic_client.get_uri()
+                                                client.get_uri()
                                             ))?;
                                         }
                                         Err(err) => {
@@ -610,15 +617,11 @@ pub async fn sdv_main(_cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                                 } else {
                                     match cli::to_uri(args) {
                                         Ok(valid_uri) => {
-                                            match client
-                                                .basic_client
-                                                .try_connect_to(valid_uri)
-                                                .await
-                                            {
+                                            match client.try_connect_to(valid_uri).await {
                                                 Ok(()) => {
                                                     cli::print_info(format!(
                                                         "[{cmd}] Successfully connected to {}",
-                                                        client.basic_client.get_uri()
+                                                        client.get_uri()
                                                     ))?;
                                                 }
                                                 Err(err) => {
@@ -634,7 +637,7 @@ pub async fn sdv_main(_cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                                         }
                                     }
                                 };
-                                if client.basic_client.is_connected() {
+                                if client.is_connected() {
                                     match client.get_metadata(vec![]).await {
                                         Ok(metadata) => {
                                             interface.set_completer(Arc::new(
@@ -642,18 +645,19 @@ pub async fn sdv_main(_cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                                             ));
                                             properties = metadata;
                                         }
-                                        Err(kuksa_common::ClientError::Status(status)) => {
-                                            cli::print_resp_err("metadata", &status)?;
-                                        }
-                                        Err(kuksa_common::ClientError::Connection(msg)) => {
-                                            cli::print_error("metadata", msg)?;
-                                        }
-                                        Err(kuksa_common::ClientError::Function(msg)) => {
-                                            cli::print_resp_err_fmt(
-                                                cmd,
-                                                format_args!("Error {msg:?}"),
-                                            )?;
-                                        }
+                                        // Err(kuksa_grpc::Error::Status(status)) => {
+                                        //     cli::print_resp_err("metadata", &status)?;
+                                        // }
+                                        // Err(kuksa_grpc::Error::Connection(msg)) => {
+                                        //     cli::print_error("metadata", msg)?;
+                                        // }
+                                        // Err(kuksa_grpc::Error::Function(msg)) => {
+                                        //     cli::print_resp_err_fmt(
+                                        //         cmd,
+                                        //         format_args!("Error {msg:?}"),
+                                        //     )?;
+                                        // }
+                                        Err(err) => cli::print_error(cmd, err.to_string())?,
                                     }
                                 }
                             };
@@ -672,18 +676,19 @@ pub async fn sdv_main(_cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                                     )));
                                     cli::print_resp_ok(cmd)?;
                                 }
-                                Err(kuksa_common::ClientError::Status(status)) => {
-                                    cli::print_resp_err(cmd, &status)?;
-                                    continue;
-                                }
-                                Err(kuksa_common::ClientError::Connection(msg)) => {
-                                    cli::print_error(cmd, msg)?;
-                                    continue;
-                                }
-                                Err(kuksa_common::ClientError::Function(msg)) => {
-                                    cli::print_resp_err_fmt(cmd, format_args!("Error {msg:?}"))?;
-                                    continue;
-                                }
+                                // Err(databroker_grpc::Error::Status(status)) => {
+                                //     cli::print_resp_err(cmd, &status)?;
+                                //     continue;
+                                // }
+                                // Err(databroker_grpc::Error::Connection(msg)) => {
+                                //     cli::print_error(cmd, msg)?;
+                                //     continue;
+                                // }
+                                // Err(databroker_grpc::Error::Function(msg)) => {
+                                //     cli::print_resp_err_fmt(cmd, format_args!("Error {msg:?}"))?;
+                                //     continue;
+                                // }
+                                Err(err) => cli::print_error(cmd, err.to_string())?,
                             }
                             let mut filtered_metadata = Vec::new();
                             if paths.is_empty() {
@@ -723,10 +728,10 @@ pub async fn sdv_main(_cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                                     println!(
                                         "{:<max_len_path$} {:<10} {:<9}",
                                         entry.name,
-                                        DisplayEntryType::from(proto::v1::EntryType::from_i32(
+                                        DisplayEntryType::from(proto::EntryType::from_i32(
                                             entry.entry_type
                                         )),
-                                        DisplayDataType::from(proto::v1::DataType::from_i32(
+                                        DisplayDataType::from(proto::DataType::from_i32(
                                             entry.data_type
                                         )),
                                     );
@@ -790,7 +795,7 @@ impl CliCompleter {
         }
     }
 
-    fn from_metadata(metadata: &[proto::v1::Metadata]) -> CliCompleter {
+    fn from_metadata(metadata: &[proto::Metadata]) -> CliCompleter {
         let mut root = PathPart::new();
         for entry in metadata {
             let mut parent = &mut root;
@@ -940,11 +945,11 @@ impl<Term: Terminal> Completer<Term> for CliCompleter {
     }
 }
 
-struct DisplayDataType(Option<proto::v1::DataType>);
-struct DisplayEntryType(Option<proto::v1::EntryType>);
+struct DisplayDataType(Option<proto::DataType>);
+struct DisplayEntryType(Option<proto::EntryType>);
 // !!! ChangeType currently just exists in old API needs to be removed or added later !!!
-struct DisplayChangeType(Option<proto::v1::ChangeType>);
-struct DisplayDatapoint(proto::v1::Datapoint);
+struct DisplayChangeType(Option<proto::ChangeType>);
+struct DisplayDatapoint(proto::Datapoint);
 
 fn display_array<T>(f: &mut fmt::Formatter<'_>, array: &[T]) -> fmt::Result
 where
@@ -965,34 +970,34 @@ impl fmt::Display for DisplayDatapoint {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self.0.value {
             Some(value) => match value {
-                proto::v1::datapoint::Value::BoolValue(value) => f.pad(&format!("{value}")),
-                proto::v1::datapoint::Value::FailureValue(failure) => f.pad(&format!(
+                proto::datapoint::Value::BoolValue(value) => f.pad(&format!("{value}")),
+                proto::datapoint::Value::FailureValue(failure) => f.pad(&format!(
                     "( {:?} )",
-                    proto::v1::datapoint::Failure::from_i32(*failure).unwrap()
+                    proto::datapoint::Failure::from_i32(*failure).unwrap()
                 )),
-                proto::v1::datapoint::Value::Int32Value(value) => f.pad(&format!("{value}")),
-                proto::v1::datapoint::Value::Int64Value(value) => f.pad(&format!("{value}")),
-                proto::v1::datapoint::Value::Uint32Value(value) => f.pad(&format!("{value}")),
-                proto::v1::datapoint::Value::Uint64Value(value) => f.pad(&format!("{value}")),
-                proto::v1::datapoint::Value::FloatValue(value) => f.pad(&format!("{value:.2}")),
-                proto::v1::datapoint::Value::DoubleValue(value) => f.pad(&format!("{value}")),
-                proto::v1::datapoint::Value::StringValue(value) => f.pad(&format!("'{value}'")),
-                proto::v1::datapoint::Value::StringArray(array) => display_array(f, &array.values),
-                proto::v1::datapoint::Value::BoolArray(array) => display_array(f, &array.values),
-                proto::v1::datapoint::Value::Int32Array(array) => display_array(f, &array.values),
-                proto::v1::datapoint::Value::Int64Array(array) => display_array(f, &array.values),
-                proto::v1::datapoint::Value::Uint32Array(array) => display_array(f, &array.values),
-                proto::v1::datapoint::Value::Uint64Array(array) => display_array(f, &array.values),
-                proto::v1::datapoint::Value::FloatArray(array) => display_array(f, &array.values),
-                proto::v1::datapoint::Value::DoubleArray(array) => display_array(f, &array.values),
+                proto::datapoint::Value::Int32Value(value) => f.pad(&format!("{value}")),
+                proto::datapoint::Value::Int64Value(value) => f.pad(&format!("{value}")),
+                proto::datapoint::Value::Uint32Value(value) => f.pad(&format!("{value}")),
+                proto::datapoint::Value::Uint64Value(value) => f.pad(&format!("{value}")),
+                proto::datapoint::Value::FloatValue(value) => f.pad(&format!("{value:.2}")),
+                proto::datapoint::Value::DoubleValue(value) => f.pad(&format!("{value}")),
+                proto::datapoint::Value::StringValue(value) => f.pad(&format!("'{value}'")),
+                proto::datapoint::Value::StringArray(array) => display_array(f, &array.values),
+                proto::datapoint::Value::BoolArray(array) => display_array(f, &array.values),
+                proto::datapoint::Value::Int32Array(array) => display_array(f, &array.values),
+                proto::datapoint::Value::Int64Array(array) => display_array(f, &array.values),
+                proto::datapoint::Value::Uint32Array(array) => display_array(f, &array.values),
+                proto::datapoint::Value::Uint64Array(array) => display_array(f, &array.values),
+                proto::datapoint::Value::FloatArray(array) => display_array(f, &array.values),
+                proto::datapoint::Value::DoubleArray(array) => display_array(f, &array.values),
             },
             None => f.pad("None"),
         }
     }
 }
 
-impl From<Option<proto::v1::EntryType>> for DisplayEntryType {
-    fn from(input: Option<proto::v1::EntryType>) -> Self {
+impl From<Option<proto::EntryType>> for DisplayEntryType {
+    fn from(input: Option<proto::EntryType>) -> Self {
         DisplayEntryType(input)
     }
 }
@@ -1006,8 +1011,8 @@ impl fmt::Display for DisplayEntryType {
     }
 }
 
-impl From<Option<proto::v1::DataType>> for DisplayDataType {
-    fn from(input: Option<proto::v1::DataType>) -> Self {
+impl From<Option<proto::DataType>> for DisplayDataType {
+    fn from(input: Option<proto::DataType>) -> Self {
         DisplayDataType(input)
     }
 }
@@ -1021,11 +1026,12 @@ impl fmt::Display for DisplayDataType {
     }
 }
 
-impl From<Option<databroker_proto::sdv::databroker::v1::ChangeType>> for DisplayChangeType {
-    fn from(input: Option<databroker_proto::sdv::databroker::v1::ChangeType>) -> Self {
+impl From<Option<proto::ChangeType>> for DisplayChangeType {
+    fn from(input: Option<proto::ChangeType>) -> Self {
         DisplayChangeType(input)
     }
 }
+
 impl fmt::Display for DisplayChangeType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.0 {
@@ -1037,133 +1043,131 @@ impl fmt::Display for DisplayChangeType {
 
 fn try_into_data_value(
     input: &str,
-    data_type: proto::v1::DataType,
-) -> Result<proto::v1::datapoint::Value, ParseError> {
+    data_type: proto::DataType,
+) -> Result<proto::datapoint::Value, ParseError> {
     if input == "NotAvailable" {
-        return Ok(proto::v1::datapoint::Value::FailureValue(
-            proto::v1::datapoint::Failure::NotAvailable as i32,
+        return Ok(proto::datapoint::Value::FailureValue(
+            proto::datapoint::Failure::NotAvailable as i32,
         ));
     }
 
     #[allow(unreachable_patterns)]
     match data_type {
-        proto::v1::DataType::String => {
-            Ok(proto::v1::datapoint::Value::StringValue(input.to_owned()))
-        }
-        proto::v1::DataType::StringArray => match cli::get_array_from_input(input.to_owned()) {
-            Ok(value) => Ok(proto::v1::datapoint::Value::StringArray(
-                proto::v1::StringArray { values: value },
-            )),
+        proto::DataType::String => Ok(proto::datapoint::Value::StringValue(input.to_owned())),
+        proto::DataType::StringArray => match cli::get_array_from_input(input.to_owned()) {
+            Ok(value) => Ok(proto::datapoint::Value::StringArray(proto::StringArray {
+                values: value,
+            })),
             Err(err) => Err(err),
         },
-        proto::v1::DataType::Bool => match input.parse::<bool>() {
-            Ok(value) => Ok(proto::v1::datapoint::Value::BoolValue(value)),
+        proto::DataType::Bool => match input.parse::<bool>() {
+            Ok(value) => Ok(proto::datapoint::Value::BoolValue(value)),
             Err(_) => Err(ParseError {}),
         },
-        proto::v1::DataType::BoolArray => match cli::get_array_from_input(input.to_owned()) {
-            Ok(value) => Ok(proto::v1::datapoint::Value::BoolArray(
-                proto::v1::BoolArray { values: value },
-            )),
+        proto::DataType::BoolArray => match cli::get_array_from_input(input.to_owned()) {
+            Ok(value) => Ok(proto::datapoint::Value::BoolArray(proto::BoolArray {
+                values: value,
+            })),
             Err(err) => Err(err),
         },
-        proto::v1::DataType::Int8 => match input.parse::<i8>() {
-            Ok(value) => Ok(proto::v1::datapoint::Value::Int32Value(value as i32)),
+        proto::DataType::Int8 => match input.parse::<i8>() {
+            Ok(value) => Ok(proto::datapoint::Value::Int32Value(value as i32)),
             Err(_) => Err(ParseError {}),
         },
-        proto::v1::DataType::Int8Array => match cli::get_array_from_input(input.to_owned()) {
-            Ok(value) => Ok(proto::v1::datapoint::Value::Int32Array(
-                proto::v1::Int32Array { values: value },
-            )),
+        proto::DataType::Int8Array => match cli::get_array_from_input(input.to_owned()) {
+            Ok(value) => Ok(proto::datapoint::Value::Int32Array(proto::Int32Array {
+                values: value,
+            })),
             Err(err) => Err(err),
         },
-        proto::v1::DataType::Int16 => match input.parse::<i16>() {
-            Ok(value) => Ok(proto::v1::datapoint::Value::Int32Value(value as i32)),
+        proto::DataType::Int16 => match input.parse::<i16>() {
+            Ok(value) => Ok(proto::datapoint::Value::Int32Value(value as i32)),
             Err(_) => Err(ParseError {}),
         },
-        proto::v1::DataType::Int16Array => match cli::get_array_from_input(input.to_owned()) {
-            Ok(value) => Ok(proto::v1::datapoint::Value::Int32Array(
-                proto::v1::Int32Array { values: value },
-            )),
+        proto::DataType::Int16Array => match cli::get_array_from_input(input.to_owned()) {
+            Ok(value) => Ok(proto::datapoint::Value::Int32Array(proto::Int32Array {
+                values: value,
+            })),
             Err(err) => Err(err),
         },
-        proto::v1::DataType::Int32 => match input.parse::<i32>() {
-            Ok(value) => Ok(proto::v1::datapoint::Value::Int32Value(value)),
+        proto::DataType::Int32 => match input.parse::<i32>() {
+            Ok(value) => Ok(proto::datapoint::Value::Int32Value(value)),
             Err(_) => Err(ParseError {}),
         },
-        proto::v1::DataType::Int32Array => match cli::get_array_from_input(input.to_owned()) {
-            Ok(value) => Ok(proto::v1::datapoint::Value::Int32Array(
-                proto::v1::Int32Array { values: value },
-            )),
+        proto::DataType::Int32Array => match cli::get_array_from_input(input.to_owned()) {
+            Ok(value) => Ok(proto::datapoint::Value::Int32Array(proto::Int32Array {
+                values: value,
+            })),
             Err(err) => Err(err),
         },
-        proto::v1::DataType::Int64 => match input.parse::<i64>() {
-            Ok(value) => Ok(proto::v1::datapoint::Value::Int64Value(value)),
+        proto::DataType::Int64 => match input.parse::<i64>() {
+            Ok(value) => Ok(proto::datapoint::Value::Int64Value(value)),
             Err(_) => Err(ParseError {}),
         },
-        proto::v1::DataType::Int64Array => match cli::get_array_from_input(input.to_owned()) {
-            Ok(value) => Ok(proto::v1::datapoint::Value::Int64Array(
-                proto::v1::Int64Array { values: value },
-            )),
+        proto::DataType::Int64Array => match cli::get_array_from_input(input.to_owned()) {
+            Ok(value) => Ok(proto::datapoint::Value::Int64Array(proto::Int64Array {
+                values: value,
+            })),
             Err(err) => Err(err),
         },
-        proto::v1::DataType::Uint8 => match input.parse::<u8>() {
-            Ok(value) => Ok(proto::v1::datapoint::Value::Uint32Value(value as u32)),
+        proto::DataType::Uint8 => match input.parse::<u8>() {
+            Ok(value) => Ok(proto::datapoint::Value::Uint32Value(value as u32)),
             Err(_) => Err(ParseError {}),
         },
-        proto::v1::DataType::Uint8Array => match cli::get_array_from_input(input.to_owned()) {
-            Ok(value) => Ok(proto::v1::datapoint::Value::Uint32Array(
-                proto::v1::Uint32Array { values: value },
-            )),
+        proto::DataType::Uint8Array => match cli::get_array_from_input(input.to_owned()) {
+            Ok(value) => Ok(proto::datapoint::Value::Uint32Array(proto::Uint32Array {
+                values: value,
+            })),
             Err(err) => Err(err),
         },
-        proto::v1::DataType::Uint16 => match input.parse::<u16>() {
-            Ok(value) => Ok(proto::v1::datapoint::Value::Uint32Value(value as u32)),
+        proto::DataType::Uint16 => match input.parse::<u16>() {
+            Ok(value) => Ok(proto::datapoint::Value::Uint32Value(value as u32)),
             Err(_) => Err(ParseError {}),
         },
-        proto::v1::DataType::Uint16Array => match cli::get_array_from_input(input.to_owned()) {
-            Ok(value) => Ok(proto::v1::datapoint::Value::Uint32Array(
-                proto::v1::Uint32Array { values: value },
-            )),
+        proto::DataType::Uint16Array => match cli::get_array_from_input(input.to_owned()) {
+            Ok(value) => Ok(proto::datapoint::Value::Uint32Array(proto::Uint32Array {
+                values: value,
+            })),
             Err(err) => Err(err),
         },
-        proto::v1::DataType::Uint32 => match input.parse::<u32>() {
-            Ok(value) => Ok(proto::v1::datapoint::Value::Uint32Value(value)),
+        proto::DataType::Uint32 => match input.parse::<u32>() {
+            Ok(value) => Ok(proto::datapoint::Value::Uint32Value(value)),
             Err(_) => Err(ParseError {}),
         },
-        proto::v1::DataType::Uint32Array => match cli::get_array_from_input(input.to_owned()) {
-            Ok(value) => Ok(proto::v1::datapoint::Value::Uint32Array(
-                proto::v1::Uint32Array { values: value },
-            )),
+        proto::DataType::Uint32Array => match cli::get_array_from_input(input.to_owned()) {
+            Ok(value) => Ok(proto::datapoint::Value::Uint32Array(proto::Uint32Array {
+                values: value,
+            })),
             Err(err) => Err(err),
         },
-        proto::v1::DataType::Uint64 => match input.parse::<u64>() {
-            Ok(value) => Ok(proto::v1::datapoint::Value::Uint64Value(value)),
+        proto::DataType::Uint64 => match input.parse::<u64>() {
+            Ok(value) => Ok(proto::datapoint::Value::Uint64Value(value)),
             Err(_) => Err(ParseError {}),
         },
-        proto::v1::DataType::Uint64Array => match cli::get_array_from_input(input.to_owned()) {
-            Ok(value) => Ok(proto::v1::datapoint::Value::Uint64Array(
-                proto::v1::Uint64Array { values: value },
-            )),
+        proto::DataType::Uint64Array => match cli::get_array_from_input(input.to_owned()) {
+            Ok(value) => Ok(proto::datapoint::Value::Uint64Array(proto::Uint64Array {
+                values: value,
+            })),
             Err(err) => Err(err),
         },
-        proto::v1::DataType::Float => match input.parse::<f32>() {
-            Ok(value) => Ok(proto::v1::datapoint::Value::FloatValue(value)),
+        proto::DataType::Float => match input.parse::<f32>() {
+            Ok(value) => Ok(proto::datapoint::Value::FloatValue(value)),
             Err(_) => Err(ParseError {}),
         },
-        proto::v1::DataType::FloatArray => match cli::get_array_from_input(input.to_owned()) {
-            Ok(value) => Ok(proto::v1::datapoint::Value::FloatArray(
-                proto::v1::FloatArray { values: value },
-            )),
+        proto::DataType::FloatArray => match cli::get_array_from_input(input.to_owned()) {
+            Ok(value) => Ok(proto::datapoint::Value::FloatArray(proto::FloatArray {
+                values: value,
+            })),
             Err(err) => Err(err),
         },
-        proto::v1::DataType::Double => match input.parse::<f64>() {
-            Ok(value) => Ok(proto::v1::datapoint::Value::DoubleValue(value)),
+        proto::DataType::Double => match input.parse::<f64>() {
+            Ok(value) => Ok(proto::datapoint::Value::DoubleValue(value)),
             Err(_) => Err(ParseError {}),
         },
-        proto::v1::DataType::DoubleArray => match cli::get_array_from_input(input.to_owned()) {
-            Ok(value) => Ok(proto::v1::datapoint::Value::DoubleArray(
-                proto::v1::DoubleArray { values: value },
-            )),
+        proto::DataType::DoubleArray => match cli::get_array_from_input(input.to_owned()) {
+            Ok(value) => Ok(proto::datapoint::Value::DoubleArray(proto::DoubleArray {
+                values: value,
+            })),
             Err(err) => Err(err),
         },
         _ => Err(ParseError {}),
@@ -1188,66 +1192,66 @@ mod test {
     fn test_parse_values() {
         // String
         assert!(matches!(
-            try_into_data_value("test", proto::v1::DataType::String),
-            Ok(proto::v1::datapoint::Value::StringValue(value)) if value == "test"
+            try_into_data_value("test", proto::DataType::String),
+            Ok(proto::datapoint::Value::StringValue(value)) if value == "test"
         ));
 
         // StringArray
         assert!(matches!(
-            try_into_data_value("[test, test2, test4]", proto::v1::DataType::StringArray),
-            Ok(proto::v1::datapoint::Value::StringArray(value)) if value == proto::v1::StringArray{values: vec!["test".to_string(), "test2".to_string(), "test4".to_string()]}
+            try_into_data_value("[test, test2, test4]", proto::DataType::StringArray),
+            Ok(proto::datapoint::Value::StringArray(value)) if value == proto::StringArray{values: vec!["test".to_string(), "test2".to_string(), "test4".to_string()]}
         ));
 
         // Bool
         assert!(matches!(
-            try_into_data_value("true", proto::v1::DataType::Bool),
-            Ok(proto::v1::datapoint::Value::BoolValue(value)) if value
+            try_into_data_value("true", proto::DataType::Bool),
+            Ok(proto::datapoint::Value::BoolValue(value)) if value
         ));
 
         assert!(matches!(
-            try_into_data_value("false", proto::v1::DataType::Bool),
-            Ok(proto::v1::datapoint::Value::BoolValue(value)) if !value
+            try_into_data_value("false", proto::DataType::Bool),
+            Ok(proto::datapoint::Value::BoolValue(value)) if !value
         ));
-        assert!(try_into_data_value("truefalse", proto::v1::DataType::Bool).is_err());
+        assert!(try_into_data_value("truefalse", proto::DataType::Bool).is_err());
         // BoolArray
         assert!(matches!(
-            try_into_data_value("[true, false, true]", proto::v1::DataType::BoolArray),
-            Ok(proto::v1::datapoint::Value::BoolArray(value)) if value == proto::v1::BoolArray{values: vec![true, false, true]}
+            try_into_data_value("[true, false, true]", proto::DataType::BoolArray),
+            Ok(proto::datapoint::Value::BoolArray(value)) if value == proto::BoolArray{values: vec![true, false, true]}
         ));
 
         // Int8
         assert!(matches!(
-            try_into_data_value("100", proto::v1::DataType::Int8),
-            Ok(proto::v1::datapoint::Value::Int32Value(value)) if value == 100
+            try_into_data_value("100", proto::DataType::Int8),
+            Ok(proto::datapoint::Value::Int32Value(value)) if value == 100
         ));
         assert!(matches!(
-            try_into_data_value("-100", proto::v1::DataType::Int8),
-            Ok(proto::v1::datapoint::Value::Int32Value(value)) if value == -100
+            try_into_data_value("-100", proto::DataType::Int8),
+            Ok(proto::datapoint::Value::Int32Value(value)) if value == -100
         ));
-        assert!(try_into_data_value("300", proto::v1::DataType::Int8).is_err());
-        assert!(try_into_data_value("-300", proto::v1::DataType::Int8).is_err());
-        assert!(try_into_data_value("-100.1", proto::v1::DataType::Int8).is_err());
+        assert!(try_into_data_value("300", proto::DataType::Int8).is_err());
+        assert!(try_into_data_value("-300", proto::DataType::Int8).is_err());
+        assert!(try_into_data_value("-100.1", proto::DataType::Int8).is_err());
 
         // Int16
         assert!(matches!(
-            try_into_data_value("100", proto::v1::DataType::Int16),
-            Ok(proto::v1::datapoint::Value::Int32Value(value)) if value == 100
+            try_into_data_value("100", proto::DataType::Int16),
+            Ok(proto::datapoint::Value::Int32Value(value)) if value == 100
         ));
         assert!(matches!(
-            try_into_data_value("-100", proto::v1::DataType::Int16),
-            Ok(proto::v1::datapoint::Value::Int32Value(value)) if value == -100
+            try_into_data_value("-100", proto::DataType::Int16),
+            Ok(proto::datapoint::Value::Int32Value(value)) if value == -100
         ));
         assert!(matches!(
-            try_into_data_value("32000", proto::v1::DataType::Int16),
-            Ok(proto::v1::datapoint::Value::Int32Value(value)) if value == 32000
+            try_into_data_value("32000", proto::DataType::Int16),
+            Ok(proto::datapoint::Value::Int32Value(value)) if value == 32000
         ));
         assert!(matches!(
-            try_into_data_value("-32000", proto::v1::DataType::Int16),
-            Ok(proto::v1::datapoint::Value::Int32Value(value)) if value == -32000
+            try_into_data_value("-32000", proto::DataType::Int16),
+            Ok(proto::datapoint::Value::Int32Value(value)) if value == -32000
         ));
-        assert!(try_into_data_value("33000", proto::v1::DataType::Int16).is_err());
-        assert!(try_into_data_value("-33000", proto::v1::DataType::Int16).is_err());
-        assert!(try_into_data_value("-32000.1", proto::v1::DataType::Int16).is_err());
+        assert!(try_into_data_value("33000", proto::DataType::Int16).is_err());
+        assert!(try_into_data_value("-33000", proto::DataType::Int16).is_err());
+        assert!(try_into_data_value("-32000.1", proto::DataType::Int16).is_err());
     }
 
     #[test]
@@ -1255,28 +1259,28 @@ mod test {
         #[allow(unused_mut, unused_assignments)]
         let mut metadata = Vec::new();
         metadata = [
-            proto::v1::Metadata {
+            proto::Metadata {
                 id: 1,
                 name: "Vehicle.Test.Test1".into(),
-                data_type: proto::v1::DataType::Bool.into(),
-                entry_type: proto::v1::EntryType::Sensor.into(),
-                change_type: proto::v1::ChangeType::OnChange.into(),
+                data_type: proto::DataType::Bool.into(),
+                entry_type: proto::EntryType::Sensor.into(),
+                change_type: proto::ChangeType::OnChange.into(),
                 description: "".into(),
             },
-            proto::v1::Metadata {
+            proto::Metadata {
                 id: 2,
                 name: "Vehicle.AnotherTest.AnotherTest1".into(),
-                data_type: proto::v1::DataType::Bool.into(),
-                entry_type: proto::v1::EntryType::Sensor.into(),
-                change_type: proto::v1::ChangeType::OnChange.into(),
+                data_type: proto::DataType::Bool.into(),
+                entry_type: proto::EntryType::Sensor.into(),
+                change_type: proto::ChangeType::OnChange.into(),
                 description: "".into(),
             },
-            proto::v1::Metadata {
+            proto::Metadata {
                 id: 3,
                 name: "Vehicle.AnotherTest.AnotherTest2".into(),
-                data_type: proto::v1::DataType::Bool.into(),
-                entry_type: proto::v1::EntryType::Sensor.into(),
-                change_type: proto::v1::ChangeType::OnChange.into(),
+                data_type: proto::DataType::Bool.into(),
+                entry_type: proto::EntryType::Sensor.into(),
+                change_type: proto::ChangeType::OnChange.into(),
                 description: "".into(),
             },
         ]

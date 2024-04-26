@@ -12,40 +12,25 @@
 #*******************************************************************************/
 
 [package]
-name = "databroker-cli"
+name = "databroker-grpc"
 version = "0.4.4"
 authors = ["Eclipse KUKSA Project"]
 edition = "2021"
 license = "Apache-2.0"
 
 [dependencies]
-kuksa = { workspace = true }
-databroker-grpc = { workspace = true }
 kuksa-grpc = { workspace = true }
 databroker-proto = { workspace = true }
-kuksa-proto = { workspace = true }
-tonic = { workspace = true, features = ["transport", "channel", "prost"] }
-prost = { workspace = true }
-prost-types = { workspace = true }
-tokio = { workspace = true, features = [
-    "macros",
-    "rt-multi-thread",
-    "time",
-    "signal",
-] }
+thiserror = { workspace = true }
+tonic = { workspace = true, features = ["transport", "channel"] }
+tokio = { workspace = true, features = ["macros"] }
 tokio-stream = { workspace = true, features = ["sync"] }
-linefeed = "0.6"
-ansi_term = "0.12"
-clap = { workspace = true, features = [
-    "std",
-    "env",
-    "derive",
-    "help",
-    "error-context",
-    "usage",
-] }
-regex = "1.6.0"
 http = "0.2.8"
+
+[lib]
+name = "databroker_grpc"
+crate-type = ["lib"]
+path = "src/lib.rs"
 
 [features]
 default = ["tls"]

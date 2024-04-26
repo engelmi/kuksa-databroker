@@ -13,7 +13,7 @@
 
 use std::collections::HashMap;
 
-use databroker_proto::sdv::databroker::v1 as proto;
+use databroker_proto::v1 as proto;
 
 use tokio::select;
 use tokio::sync::mpsc;

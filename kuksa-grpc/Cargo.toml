@@ -12,23 +12,20 @@
 #*******************************************************************************/
 
 [package]
-name = "kuksa-common"
+name = "kuksa-grpc"
 version = "0.4.4"
 authors = ["Eclipse KUKSA Project"]
 edition = "2021"
 license = "Apache-2.0"
 
 [dependencies]
-databroker-proto = { workspace = true }
 tonic = { workspace = true, features = ["transport", "channel"] }
-tokio = { workspace = true, features = [
-    "macros",
-] }
+tokio = { workspace = true, features = ["macros"] }
 tokio-stream = { workspace = true, features = ["sync"] }
 http = "0.2.8"
 
 [lib]
-name = "kuksa_common"
+name = "kuksa_grpc"
 crate-type = ["lib"]
 path = "src/lib.rs"
 
